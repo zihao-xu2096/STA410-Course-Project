@@ -335,7 +335,6 @@ class BayesianImputer:
 
         n_imputations = len(self.imputed_datasets)
         imputed_concat = pd.concat(self.imputed_datasets, keys=range(n_imputations), names=['imputation'])
-        missing_mask = self.data.isnull()
 
         numeric_cols = self.data.select_dtypes(include=[np.number]).columns
         n_plots = sum(self.data[col].isnull().any() for col in self.data.columns)
@@ -355,11 +354,17 @@ class BayesianImputer:
 
             ax = axes[plot_idx]
             observed = self.data[col].dropna()
-            imputed_all = imputed_concat.loc[(slice(None),), col]
-            imputed_only = imputed_concat.loc[(slice(None), self.data[col].isnull()), col]
+            imputed_all = imputed_concat[col]
+
+            imputed_flat = imputed_all.reset_index(level='imputation', drop=True)
+
+            # Repeat missing mask for each imputation
+            mask = self.data[col].isnull().values
+            repeated_mask = np.tile(mask, n_imputations)
+            imputed_only = imputed_flat.loc[repeated_mask]
 
             if col in numeric_cols:
-                # Numeric columns: use KDE or histogram
+                # Numeric: use KDE or histogram
                 if kind == "kde":
                     sns.kdeplot(observed, ax=ax, color='blue', label='Observed', linewidth=2)
                     sns.kdeplot(imputed_only, ax=ax, color='orange', label='Imputed', linewidth=2)
@@ -373,7 +378,7 @@ class BayesianImputer:
 
                 ax.set_ylabel("Density")
             else:
-                # Categorical columns: use bar plots
+                # Categorical: use bar plot
                 observed_counts = observed.value_counts(normalize=True)
                 imputed_counts = imputed_only.value_counts(normalize=True)
                 categories = sorted(set(observed_counts.index).union(imputed_counts.index))
@@ -386,7 +391,6 @@ class BayesianImputer:
                 ax.bar(x + 0.2, imp_vals, width=0.4, label='Imputed', color='orange')
                 ax.set_xticks(x)
                 ax.set_xticklabels(categories)
-
                 ax.set_ylabel("Proportion")
 
             ax.set_title(f"Observed vs Imputed: {col}")
@@ -398,6 +402,7 @@ class BayesianImputer:
 
         plt.tight_layout()
         plt.show()
+
     
     def simulate_missing(self, mechanism='MCAR', percent=0.1):
         """
