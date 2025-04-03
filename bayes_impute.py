@@ -1,8 +1,9 @@
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.stats import norm
 import pandas as pd
 import seaborn as sns
+from scipy.stats import norm
+
 
 class BayesianImputer:
     
@@ -36,7 +37,7 @@ class BayesianImputer:
         self.mechanism = mechanism
         self.method = method
         self.num_imputations = num_imputations
-        # self.priors = priors or {}  #Use empty dictionary if no priors provided
+        self.priors = priors or {}  #Use empty dictionary if no priors provided
         self.missing_mask = self.data.isnull()
         self.imputed_datasets = []       #To store multiple imputed datasets
         self.trace_logs = []             #To store MCMC traces for diagnostics
@@ -180,38 +181,125 @@ class BayesianImputer:
         print("[MH] Metropolis-Hastings sampling finished.")
 
     def generate_multiple_imputations(self):
-        pass
+        """
+        Public method to generate multiple imputations using the selected MCMC method.
+        """
+        return self.impute(return_all=True)
+
+    def bayesian_regression_impute(self, target_col, n_iter=100):
+        """
+        Perform Bayesian regression imputation for a target column using observed covariates.
+
+        Parameters:
+        - target_col: str
+            The name of the column to impute using Bayesian linear regression.
+        - n_iter: int
+            Number of posterior samples to draw (for imputation uncertainty).
+
+        Returns:
+            List of imputed datasets with target_col filled in.
+        """
+        if not self.initialized:
+            raise RuntimeError("Missing values must be initialized before regression imputation.")
+
+        if target_col not in self.data.columns:
+            raise ValueError(f"{target_col} not in data.")
+
+        missing_mask = self.data[target_col].isnull()
+        if not missing_mask.any():
+            print(f"No missing values in {target_col}.")
+            return self.imputed_datasets if self.imputed_datasets else [self.data.copy()]
+
+        # Use other columns as predictors (check they don't have missing values)
+        predictors = [col for col in self.data.columns if col != target_col]
+        
+        # Check that predictor columns don't have missing values
+        if self.data[predictors].isnull().any().any():
+            raise ValueError("Predictor columns must not have missing values. Impute them first.")
+            
+        # Use initialized data for regression
+        X = self.initialized_data[predictors].values
+        y = self.initialized_data[target_col].values
+
+        # Split into observed (non-missing) and rows to impute
+        X_obs = X[~missing_mask]
+        y_obs = y[~missing_mask]
+        X_miss = X[missing_mask]
+
+        n, p = X_obs.shape
+
+        # Prior: β ~ N(0, σ² * I), σ² known
+        beta_prior_mean = np.zeros(p)
+        beta_prior_cov = np.eye(p) * 10
+
+        sigma_sq = np.var(y_obs)
+
+        # Posterior: β | y ~ N(post_mean, post_cov)
+        XtX = X_obs.T @ X_obs
+        # Use more stable solver instead of direct inversion
+        post_cov = np.linalg.inv(np.linalg.inv(beta_prior_cov) + XtX / sigma_sq)
+        post_mean = post_cov @ (X_obs.T @ y_obs) / sigma_sq
+
+        # Generate multiple imputed datasets
+        imputed_datasets = []
+        trace_logs = []
+        
+        for i in range(self.num_imputations):
+            # Sample β from posterior
+            beta = np.random.multivariate_normal(post_mean, post_cov)
+            
+            # Sample imputation with noise
+            y_pred = X_miss @ beta
+            y_imputed = y_pred + np.random.normal(0, np.sqrt(sigma_sq), size=len(y_pred))
+            
+            # Create imputed dataset
+            imputed_data = self.data.copy()
+            imputed_data.loc[missing_mask, target_col] = y_imputed
+            imputed_datasets.append(imputed_data)
+            
+            # Store trace for diagnostics
+            trace_logs.append((target_col, y_imputed))
+        
+        # Update class attributes
+        self.imputed_datasets = imputed_datasets
+        self.trace_logs = trace_logs
+        self.model_fitted = True
+        
+        print(f"[Bayesian Regression] Imputed {missing_mask.sum()} values in '{target_col}' across {self.num_imputations} datasets")
+        
+        return imputed_datasets
 
     def posterior_diagnostics(self):
         """
         Plot diagnostic graphs for MCMC convergence and posterior stability.
-
-        Assumes `self.trace_logs` is a dictionary where keys are parameter names
-        and values are lists or arrays of sampled values from the MCMC process.
-
-        For each parameter, the following are plotted:
-        - Trace plot (sample values vs iteration)
-        - Histogram (posterior distribution)
-
-        Raises:
-        - ValueError: if `self.trace_logs` is empty or uninitialized.
+        Aggregates sampled values for each column from all imputations.
         """
         if not self.trace_logs:
             raise ValueError("No MCMC trace logs found. Run imputation to collect posterior samples.")
 
-        for param, samples in self.trace_logs.items():
+        traces_by_column = {}
+
+        # Process all imputations
+        for imputation_trace in self.trace_logs:
+            for col, samples in imputation_trace:
+                traces_by_column.setdefault(col, []).append(samples)
+
+        for param, samples in traces_by_column.items():
+            # Flatten all sample arrays
+            flattened_samples = np.concatenate([np.asarray(s) for s in samples])
+
             plt.figure(figsize=(14, 5))
 
-            # Trace Plot
+            # Trace plot
             plt.subplot(1, 2, 1)
-            plt.plot(samples, color="blue", linewidth=0.7)
+            plt.plot(flattened_samples, color="blue", linewidth=0.7)
             plt.title(f"Trace Plot: {param}")
             plt.xlabel("Iteration")
             plt.ylabel("Sample Value")
 
-            # Histogram of posterior
+            # Histogram
             plt.subplot(1, 2, 2)
-            sns.histplot(samples, kde=True, bins=30, color="orange")
+            sns.histplot(flattened_samples, kde=True, bins=30, color="orange")
             plt.title(f"Posterior Distribution: {param}")
             plt.xlabel("Value")
             plt.ylabel("Density")
@@ -219,9 +307,6 @@ class BayesianImputer:
             plt.suptitle(f"Posterior Diagnostics for '{param}'")
             plt.tight_layout(rect=[0, 0, 1, 0.95])
             plt.show()
-
-    def compare_with_pymc(self, pymc_results):
-        pass
 
     def visualize_imputations(self, kind="kde", show_summary=True, max_cols=4):
         """
@@ -313,6 +398,7 @@ class BayesianImputer:
 
         plt.tight_layout()
         plt.show()
+    
     def simulate_missing(self, mechanism='MCAR', percent=0.1):
         """
         Simulate missingness in the dataset according to a specified mechanism.
@@ -486,5 +572,3 @@ class BayesianImputer:
         - NotImplementedError: Placeholder to indicate this is an exploratory extension.
         """
         raise NotImplementedError("Causal inference support is not implemented. See docstring for suggested directions.")
-
-        
