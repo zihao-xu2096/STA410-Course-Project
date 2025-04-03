@@ -1,7 +1,7 @@
 import numpy as np
 from scipy.stats import norm
 import pandas as pd
-
+from numpy.random import normal
 class BayesianImputer:
     
     def __init__(self, data, mechanism='MAR', priors=None, num_imputations=5, method='gibbs'):
@@ -65,7 +65,7 @@ class BayesianImputer:
         for col in initialized_data.columns:
             if initialized_data[col].isnull().any():
                 mean_val = initialized_data[col].mean()
-                initialized_data[col].fillna(mean_val, inplace=True)
+                initialized_data[col] = initialized_data[col].fillna(mean_val)  # <- SAFE
         self.initialized = True
         self.initialized_data = initialized_data
         print("[InitMissing] Missing values initialized using column means.")
@@ -96,11 +96,11 @@ class BayesianImputer:
         Simple Gibbs sampler for normally distributed data.
         Assumes missing-at-random and normal priors.
         """
-        from numpy.random import normal
+
 
         data = self.initialized_data.copy()
         missing_mask = self.missing_mask
-        n_iter = 100
+        n_iter = 500
         imputed_versions = []
 
         print("[Gibbs] Starting Gibbs sampling...")
