@@ -23,10 +23,6 @@ This repository contains a Python package and demo notebook for Bayesian missing
 - Generate multiple posterior-consistent imputations
 - Provide visualization and diagnostics tools
 - Compare with PyMC implementations
-- Explore the impact of imputation on causal inference
-
-> MNAR support is planned for future extension.
-
 ---
 
 ## Features
@@ -49,5 +45,5 @@ This repository contains a Python package and demo notebook for Bayesian missing
 
 ##  Authors
 
-- Harry Zhao
+- Zihao Xu
 - Shipeng Zhang
